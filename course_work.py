@@ -1,7 +1,11 @@
-import requests
 from datetime import datetime
 from tqdm import tqdm
+from pydrive.auth import GoogleAuth
+from pydrive.drive import GoogleDrive
+import requests
+import io
 import json
+
 
 """
 Для корректной работы необходимо извлечь два токена из Файла Tokens.txt
@@ -69,7 +73,6 @@ class UsersVK:
             photo_dict.setdefault('url', size[0]['url'])
             photo_dict.setdefault('type_size', type_size)
             user_profile_photos.append(photo_dict)
-            print(photo_dict.get('url'))
 
         return user_profile_photos
 
@@ -105,6 +108,7 @@ class UsersYD:
         о загруженных фотографиях.
         """
         upload_url = self.url + 'upload'
+        data_json = []
 
         for file in tqdm(files, desc="Loading: ", ncols=100, colour='green'):
             params_for_upload = {
@@ -114,15 +118,83 @@ class UsersYD:
             }
             res = requests.post(upload_url, params=params_for_upload, headers=self.headers)
             status = res.status_code
-            with open('data.json', 'a') as outfile:
-                json.dump({
+            data = {
                         "file_name": f"{file['name']}.jpg",
                         "size": file['type_size']
-                }, outfile, indent=0)
-                outfile.write('\n')
+                }
+            data_json.append(data)
+        with open('data.json', 'a') as outfile:
+            json.dump(data_json, outfile, indent=0)
 
         if 400 > status:
-            print('Фотографии загружены на: https://disk.yandex.ru/client/disk/course_work_by_Gusev_Timur')
+            print(f'Фотографии загружены на: https://disk.yandex.ru/client/disk/{name_dir}')
+        else:
+            print('Ошибка загрузки')
+
+
+class Users_GDrive:
+
+
+    def __init__(self):
+        """
+        Для корректной работы экземпляра класса необходимо в дирректории проекта
+        разместить файл client_secrets.json
+        """
+        self.goauth = GoogleAuth()
+        self.goauth.LocalWebserverAuth()
+        self.drive = GoogleDrive(self.goauth)
+
+    def create_new_folder(self, name: str):
+        """
+        Метод создает папку на Google Диске пользователя
+        :param name_dir: название папки
+        :return: id новой папки
+        """
+        folder = self.drive.CreateFile({
+            'title': name,
+            'mimeType': 'application/vnd.google-apps.folder'
+        })
+        folder.Upload()
+
+        return folder['id']
+
+    def upload_file(self, files: list, id_dir: str):
+        """
+        Метод загружает на Google Диск пользователя фото
+        :param files: Список со словарями, которые содержат ссылки на фото
+        :param id_dir: ID папки, в которую необходимо совешить загрузку
+        (можно получить с помощью метода create_new_folder)
+        :return: Прогресс-бар с ходом загрузки, результат загрузки и создает json-файл с информацией
+        о загруженных фотографиях.
+        """
+        access_token = self.goauth.attr['credentials'].access_token
+        data_json = []
+        for file in tqdm(files, desc="Loading: ", ncols=100, colour='green'):
+
+            metadata = {
+                "name": file['name'] + '.jpg',
+                "parents": [id_dir]
+            }
+            files_gdrive = {
+                'data': ('metadata', json.dumps(metadata), 'application/json'),
+                'file': io.BytesIO(requests.get(file['url']).content)
+            }
+            r = requests.post(
+                "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+                headers={"Authorization": "Bearer " + access_token},
+                files=files_gdrive
+            )
+            status = r.status_code
+            data = {
+                "file_name": f"{file['name']}.jpg",
+                "size": file['type_size']
+            }
+            data_json.append(data)
+        with open('data.json', 'a') as outfile:
+            json.dump(data_json, outfile, indent=0)
+
+        if 400 > status:
+            print(f'Фотографии загружены на: https://drive.google.com/drive/u/0/folders/{id_dir}')
         else:
             print('Ошибка загрузки')
 
@@ -130,13 +202,24 @@ class UsersYD:
 def main():
     id_vk = input("Введите id пользователя VK: ")
     user_vk = UsersVK()
-    user_yd = UsersYD()
     name_directory = input('Введите название для новой папки: ')
-    user_yd.create_folder(name_directory)
-    json_photo = user_vk.get_photo(id_vk,)
+    json_photo = user_vk.get_photo(id_vk)
     parsed_photo = user_vk.parsed_photo(json_photo)
-    user_yd.upload_file(parsed_photo, name_directory)
+    func = input('Куда вы хотите загрузить файл:\n'
+                 'YD - YandexDisk\n'
+                 'GD - GoogleDrive\n'
+                 'Введите команду: ')
+    if func == 'YD':
+        user_yd = UsersYD()
+        user_yd.create_folder(name_directory)
+        user_yd.upload_file(parsed_photo, name_directory)
+    elif func == 'GD':
+        user_gdrive = Users_GDrive()
+        id_directory = user_gdrive.create_new_folder(name_directory)
+        user_gdrive.upload_file(parsed_photo, id_directory)
 
 
 if __name__ == '__main__':
     main()
+
+
